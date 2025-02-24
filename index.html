@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Maps Clone - EV Charging Stations</title>
+
+    <!-- Leaflet Maps Styles -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet-routing-machine/dist/leaflet-routing-machine.js"></script>
+
+    <style>
+        body { margin: 0; font-family: Arial, sans-serif; }
+        #map { height: 100vh; width: 100%; }
+        #controls {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            box-shadow: 0px 2px 10px rgba(0, 0, 0, 0.2);
+            width: 70%;
+            justify-content: space-between;
+            z-index: 1000;
+        }
+        #destination-input {
+            width: 50%;
+            padding: 5px;
+            font-size: 14px;
+            border: none;
+            outline: none;
+        }
+        #start-navigation, #locate-me, #toggle-language, #stop-navigation {
+            padding: 5px 10px;
+            background: blue;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin-left: 5px;
+        }
+        #next-instruction {
+            position: absolute;
+            top: 70px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 16px;
+            text-align: center;
+            display: none;
+            width: 50%;
+            z-index: 1000;
+        }
+        #suggestions {
+            position: absolute;
+            top: 50px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 10px;
+            border-radius: 8px;
+            box-shadow: 0px 2px 10px rgba(0, 0, 0, 0.2);
+            width: 50%;
+            z-index: 1000;
+            display: none;
+        }
+        .station-popup { text-align: center; }
+        .station-popup button {
+            padding: 5px 10px;
+            margin: 5px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+        .station-popup button.navigate { background: blue; color: white; }
+        .station-popup button.details { background: green; color: white; }
+    </style>
+</head>
+<body>
+
+    <div id="controls">
+        <input type="text" id="destination-input" placeholder="Search for a destination or charging station...">
+        <button id="start-navigation">Start</button>
+        <button id="stop-navigation">Stop</button>
+        <button id="locate-me">📍 My Location</button>
+        <button id="toggle-language">🔊 English</button>
+    </div>
+
+    <div id="suggestions"></div>
+    <div id="map"></div>
+    <div id="next-instruction">Next direction will appear here...</div>
+
+    <script>
+        let map = L.map('map').setView([31.963158, 35.930359], 12);
+        let userMarker, userLocation, routingControl;
+        let speechSynthesis = window.speechSynthesis;
+        let voiceLanguage = "en-US";
+        let nextInstruction = document.getElementById("next-instruction");
+        let suggestionsDiv = document.getElementById("suggestions");
+
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Charging stations data
+        let stations = [
+            { name: "Abdoun Station", lat: 31.9496, lng: 35.8934, chargers: "Fast", status: "Available", distance: "5 km", time: "10 mins" },
+            { name: "Marj Al-Hamam Station", lat: 31.9158, lng: 35.8562, chargers: "Standard", status: "Unavailable", distance: "8 km", time: "15 mins" },
+            { name: "Mecca Street Station", lat: 31.9784, lng: 35.8554, chargers: "Fast", status: "Available", distance: "12 km", time: "20 mins" },
+            { name: "Irbid Mall Station", lat: 32.5353, lng: 35.8516, chargers: "Standard", status: "Available", distance: "25 km", time: "30 mins" },
+            { name: "City Center Irbid Station", lat: 32.5451, lng: 35.8577, chargers: "Fast", status: "Unavailable", distance: "30 km", time: "35 mins" }
+        ];
+
+        // Add station markers
+        stations.forEach(station => {
+            let marker = L.marker([station.lat, station.lng], {
+                icon: L.icon({
+                    iconUrl: 'https://cdn-icons-png.flaticon.com/512/684/684908.png',
+                    iconSize: [30, 30],
+                    className: 'station-marker'
+                })
+            }).addTo(map);
+
+            // Display station name above the marker
+            marker.bindTooltip(station.name, { permanent: true, direction: 'top' });
+
+            // Show station details on click
+            marker.bindPopup(`
+                <div class="station-popup">
+                    <h3>${station.name}</h3>
+                    <p>Charger Type: ${station.chargers}</p>
+                    <p>Status: ${station.status}</p>
+                    <p>Distance: ${station.distance}</p>
+                    <p>Estimated Time: ${station.time}</p>
+                    <button class="navigate" onclick="navigateToStation(${station.lat}, ${station.lng})">🚗 Navigate</button>
+                    <button class="details" onclick="showStationDetails('${station.name}')">ℹ️ More Info</button>
+                </div>
+            `);
+        });
+
+        // Track user location
+        function trackUserLocation() {
+            navigator.geolocation.getCurrentPosition(position => {
+                userLocation = [position.coords.latitude, position.coords.longitude];
+                if (!userMarker) {
+                    userMarker = L.marker(userLocation, {
+                        icon: L.icon({
+                            iconUrl: 'https://cdn-icons-png.flaticon.com/512/167/167734.png', // Red marker
+                            iconSize: [30, 30]
+                        })
+                    }).addTo(map)
+                        .bindPopup("📍 Your Location").openPopup();
+                } else {
+                    userMarker.setLatLng(userLocation);
+                }
+                map.setView(userLocation, 15);
+            });
+        }
+
+        document.getElementById("locate-me").addEventListener("click", trackUserLocation);
+        trackUserLocation();
+
+        // Speak a text using Web Speech API
+        function speak(text) {
+            if (speechSynthesis.speaking) {
+                speechSynthesis.cancel(); // Stop any ongoing speech
+            }
+            let utterance = new SpeechSynthesisUtterance(text);
+            utterance.lang = voiceLanguage; // Set the language
+            speechSynthesis.speak(utterance);
+        }
+
+        // Navigate to a station
+        function navigateToStation(lat, lng) {
+            if (!userLocation) {
+                alert("⚠️ Please enable location services first.");
+                return;
+            }
+            if (routingControl) {
+                map.removeControl(routingControl);
+            }
+            routingControl = L.Routing.control({
+                waypoints: [L.latLng(userLocation[0], userLocation[1]), L.latLng(lat, lng)],
+                routeWhileDragging: false,
+                lineOptions: { styles: [{ color: 'red', weight: 6 }] },
+                show: false
+            }).addTo(map);
+
+            let spoken300m = false; // Flag to track if 300m warning has been spoken
+            let spoken50m = false; // Flag to track if 50m warning has been spoken
+
+            routingControl.on('routesfound', function(e) {
+                let routes = e.routes;
+                let route = routes[0];
+                let instructions = route.instructions;
+
+                let currentStep = 0;
+                function updateInstruction() {
+                    if (currentStep < instructions.length) {
+                        let instruction = instructions[currentStep];
+                        let distanceToNext = instruction.distance; // Distance to next instruction in meters
+
+                        // Speak before 300 meters
+                        if (distanceToNext <= 300 && !spoken300m) {
+                            speak(`In 300 meters, ${instruction.text}`);
+                            spoken300m = true; // Mark as spoken
+                        }
+
+                        // Speak before 50 meters
+                        if (distanceToNext <= 50 && !spoken50m) {
+                            speak(`In 50 meters, ${instruction.text}`);
+                            spoken50m = true; // Mark as spoken
+                        }
+
+                        // Update the displayed instruction
+                        nextInstruction.innerText = instruction.text;
+                        nextInstruction.style.display = "block";
+
+                        // Move to the next step after a delay
+                        setTimeout(() => {
+                            currentStep++;
+                            spoken300m = false; // Reset flags for the next instruction
+                            spoken50m = false;
+                            updateInstruction();
+                        }, 1000); // Check every second
+                    } else {
+                        nextInstruction.style.display = "none";
+                        speak("You have arrived at your destination.");
+                    }
+                }
+                updateInstruction();
+            });
+        }
+
+        // Show station details
+        function showStationDetails(name) {
+            let station = stations.find(s => s.name === name);
+            if (station) {
+                alert(`Station Details:\n
+Name: ${station.name}\n
+Charger Type: ${station.chargers}\n
+Status: ${station.status}\n
+Distance: ${station.distance}\n
+Estimated Time: ${station.time}`);
+            }
+        }
+
+        // Toggle language
+        document.getElementById("toggle-language").addEventListener("click", function() {
+            voiceLanguage = voiceLanguage === "en-US" ? "ar-SA" : "en-US";
+            this.innerText = voiceLanguage === "en-US" ? "🔊 English" : "🔊 Arabic";
+        });
+
+        // Stop navigation
+        document.getElementById("stop-navigation").addEventListener("click", function() {
+            if (routingControl) {
+                map.removeControl(routingControl);
+                routingControl = null;
+                nextInstruction.style.display = "none";
+                speechSynthesis.cancel(); // Stop any ongoing speech
+            }
+        });
+
+        // Search for destinations
+        document.getElementById("destination-input").addEventListener("input", function() {
+            let query = this.value;
+            if (query.length > 2) {
+                fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${query}`)
+                    .then(response => response.json())
+                    .then(data => {
+                        suggestionsDiv.innerHTML = "";
+                        data.forEach(item => {
+                            let suggestion = document.createElement("div");
+                            suggestion.innerText = item.display_name;
+                            suggestion.addEventListener("click", () => {
+                                document.getElementById("destination-input").value = item.display_name;
+                                suggestionsDiv.style.display = "none";
+                                navigateToStation(item.lat, item.lon);
+                            });
+                            suggestionsDiv.appendChild(suggestion);
+                        });
+                        suggestionsDiv.style.display = "block";
+                    });
+            } else {
+                suggestionsDiv.style.display = "none";
+            }
+        });
+    </script>
+</body>
+</html>
