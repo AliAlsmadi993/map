@@ -81,6 +81,11 @@
             border-radius: 5px;
             cursor: pointer;
         }
+
+        .leaflet-routing-alternatives-container{
+                display: none !important;
+            }
+
         .station-popup button.navigate { background: blue; color: white; }
         .station-popup button.details { background: green; color: white; }
     </style>
@@ -147,26 +152,58 @@
             `);
         });
 
-        // Track user location
+        // Track user location continuously
         function trackUserLocation() {
-            navigator.geolocation.getCurrentPosition(position => {
-                userLocation = [position.coords.latitude, position.coords.longitude];
-                if (!userMarker) {
-                    userMarker = L.marker(userLocation, {
-                        icon: L.icon({
-                            iconUrl: 'https://cdn-icons-png.flaticon.com/512/167/167734.png', // Red marker
-                            iconSize: [30, 30]
-                        })
-                    }).addTo(map)
-                        .bindPopup("📍 Your Location").openPopup();
-                } else {
-                    userMarker.setLatLng(userLocation);
-                }
-                map.setView(userLocation, 15);
-            });
+            if (navigator.geolocation) {
+                navigator.geolocation.watchPosition(
+                    (position) => {
+                        userLocation = [position.coords.latitude, position.coords.longitude];
+                        let heading = position.coords.heading; // Get the user's heading (direction)
+
+                        if (!userMarker) {
+                            userMarker = L.marker(userLocation, {
+                                icon: L.icon({
+                                    iconUrl: 'https://cdn-icons-png.flaticon.com/512/167/167734.png', // Red marker
+                                    iconSize: [30, 30],
+                                    className: 'user-marker',
+                                    iconAnchor: [15, 15], // Center the icon
+                                    popupAnchor: [0, -15]
+                                })
+                            }).addTo(map)
+                                .bindPopup("📍 Your Location").openPopup();
+                        } else {
+                            userMarker.setLatLng(userLocation);
+                        }
+
+                        // Update the marker's rotation based on heading
+                        if (heading) {
+                            userMarker.setIcon(L.icon({
+                                iconUrl: 'https://cdn-icons-png.flaticon.com/512/167/167734.png', // Red marker
+                                iconSize: [30, 30],
+                                className: 'user-marker',
+                                iconAnchor: [15, 15], // Center the icon
+                                popupAnchor: [0, -15],
+                                rotationAngle: heading // Rotate the marker based on heading
+                            }));
+                        }
+
+                        map.setView(userLocation, 15); // Center the map on the user's location
+                    },
+                    (error) => {
+                        console.error("Error getting location:", error);
+                    },
+                    {
+                        enableHighAccuracy: true, // Use high accuracy mode
+                        maximumAge: 0, // Do not use cached positions
+                        timeout: 5000 // Timeout after 5 seconds
+                    }
+                );
+            } else {
+                alert("Geolocation is not supported by this browser.");
+            }
         }
 
-        document.getElementById("locate-me").addEventListener("click", trackUserLocation);
+        // Start tracking user location when the page loads
         trackUserLocation();
 
         // Speak a text using Web Speech API
@@ -204,7 +241,7 @@
                 let instructions = route.instructions;
 
                 let currentStep = 0;
-                function updateInstruction() {
+                let intervalId = setInterval(() => {
                     if (currentStep < instructions.length) {
                         let instruction = instructions[currentStep];
                         let distanceToNext = instruction.distance; // Distance to next instruction in meters
@@ -225,19 +262,18 @@
                         nextInstruction.innerText = instruction.text;
                         nextInstruction.style.display = "block";
 
-                        // Move to the next step after a delay
-                        setTimeout(() => {
+                        // Move to the next step if the distance is less than 10 meters
+                        if (distanceToNext < 10) {
                             currentStep++;
                             spoken300m = false; // Reset flags for the next instruction
                             spoken50m = false;
-                            updateInstruction();
-                        }, 1000); // Check every second
+                        }
                     } else {
+                        clearInterval(intervalId); // Stop the interval
                         nextInstruction.style.display = "none";
                         speak("You have arrived at your destination.");
                     }
-                }
-                updateInstruction();
+                }, 1000); // Check every second
             });
         }
 
